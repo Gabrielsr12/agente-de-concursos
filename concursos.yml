@@ -1,0 +1,60 @@
+name: Agente de concursos
+
+on:
+  schedule:
+    # 11:00 e 21:00 UTC = 08:00 e 18:00 no horário de Brasília
+    - cron: "0 11,21 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write # necessário para salvar state/seen.json
+
+concurrency:
+  group: concursos
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Subir a API de concursos (Flask) dentro do job
+        run: |
+          git clone --depth 1 https://github.com/Vinimartinsc/concursosPublicosAPI.git /tmp/api
+          pip install -r /tmp/api/requirements.txt || pip install flask requests beautifulsoup4
+          cd /tmp/api
+          nohup python -m flask --app app run --port 5000 > /tmp/api.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:5000/ && break
+            sleep 1
+          done
+
+      - name: Buscar concursos e enviar novidades
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          UFS: ${{ vars.UFS || 'rj,br' }}
+          STATUSES: ${{ vars.STATUSES || 'open' }}
+          KEYWORDS: ${{ vars.KEYWORDS || '' }}
+        run: python bot.py
+
+      - name: Salvar estado (links já enviados)
+        if: always()
+        run: |
+          git config user.name "concursos-bot"
+          git config user.email "concursos-bot@users.noreply.github.com"
+          git add state/seen.json || true
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: atualiza concursos já enviados"
+            git push
+          fi
+
+      - name: Log da API em caso de falha
+        if: failure()
+        run: tail -n 40 /tmp/api.log || true
