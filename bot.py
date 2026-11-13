@@ -11,15 +11,17 @@ import argparse
 import html
 import json
 import os
+import re
 import sys
 import time
 import unicodedata
 from datetime import datetime, timedelta, timezone
+from html.parser import HTMLParser
 from pathlib import Path
 from urllib import error, parse, request
 
 PCI = "https://www.pciconcursos.com.br"
-SITE_BASE = "https://concursosnobrasil.com"
+SITE_BASE = os.environ.get("SITE_BASE", "https://concursosnobrasil.com").rstrip("/")
 TELEGRAM_LIMIT = 3900  # o limite do Telegram é 4096 caracteres por mensagem
 STATUS_LABEL = {
     "open": ("🟢", "Aberto"),
@@ -27,6 +29,10 @@ STATUS_LABEL = {
     "closed": ("🔴", "Encerrado"),
 }
 USER_AGENT = "concursos-bot/1.0"
+BROWSER_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0 Safari/537.36"
+)
 
 
 def log(msg):
@@ -72,7 +78,98 @@ def http_get_json(url, retries=3, timeout=45):
     raise RuntimeError(f"falha ao consultar {url}: {last}")
 
 
+class _RowParser(HTMLParser):
+    """Extrai as linhas de tabela: primeiro link e texto de cada célula.
+
+    Não depende de nomes de classe CSS, que é o que costuma quebrar scrapers.
+    """
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.rows = []
+        self._row = None
+        self._cell = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "tr":
+            self._row = {"href": None, "cells": []}
+        elif tag in ("td", "th") and self._row is not None:
+            self._cell = []
+        elif tag == "a" and self._row is not None and self._row["href"] is None:
+            self._row["href"] = dict(attrs).get("href")
+
+    def handle_data(self, data):
+        if self._cell is not None:
+            self._cell.append(data)
+
+    def handle_endtag(self, tag):
+        if tag in ("td", "th") and self._cell is not None and self._row is not None:
+            self._row["cells"].append(" ".join("".join(self._cell).split()))
+            self._cell = None
+        elif tag == "tr" and self._row is not None:
+            self.rows.append(self._row)
+            self._row = None
+
+
+def fetch_direct(uf):
+    """Lê a tabela de concursos direto do ConcursosNoBrasil (plano B da API)."""
+    url = f"{SITE_BASE}/concursos/{uf}/"
+    req = request.Request(
+        url,
+        headers={
+            "User-Agent": BROWSER_UA,
+            "Accept": "text/html,application/xhtml+xml",
+            "Accept-Language": "pt-BR,pt;q=0.9",
+        },
+    )
+    try:
+        with request.urlopen(req, timeout=45) as resp:
+            status, raw = resp.status, resp.read()
+    except error.HTTPError as exc:
+        raise RuntimeError(f"site respondeu HTTP {exc.code} em {url} (possível bloqueio do IP do servidor)") from None
+    except error.URLError as exc:
+        raise RuntimeError(f"falha de rede ao abrir {url}: {exc.reason}") from None
+
+    text = raw.decode("utf-8", errors="replace")
+    parser = _RowParser()
+    parser.feed(text)
+    items = []
+    for row in parser.rows:
+        href, cells = row["href"], row["cells"]
+        if not href or href.startswith("#") or len(cells) < 2:
+            continue
+        status_txt = "expected" if re.search(r"previsto", cells[0], re.I) else "open"
+        org = re.sub(r"\s*previsto\s*$", "", cells[0], flags=re.I).strip()
+        if not org:
+            continue
+        items.append(
+            {
+                "link": parse.urljoin(url, href),
+                "organization": org,
+                "vagas": cells[1],
+                "status": status_txt,
+            }
+        )
+    if not items:
+        title = re.search(r"<title[^>]*>(.*?)</title>", text, re.I | re.S)
+        title = " ".join(title.group(1).split())[:80] if title else "sem título"
+        raise RuntimeError(
+            f"nenhuma linha de concurso encontrada em {url} "
+            f"(HTTP {status}, {len(raw)} bytes, {len(parser.rows)} linhas de tabela, título: {title!r})"
+        )
+    return items
+
+
 def fetch_concursos(api_url, uf):
+    """Tenta a API; se ela falhar, lê o site direto."""
+    try:
+        return fetch_from_api(api_url, uf)
+    except RuntimeError as exc:
+        log(f"[{uf}] API falhou ({str(exc)[:120]}); lendo o site direto")
+        return fetch_direct(uf)
+
+
+def fetch_from_api(api_url, uf):
     data = http_get_json(f"{api_url}/concursos/{uf}")
     if not isinstance(data, list):
         raise RuntimeError(f"resposta inesperada da API para '{uf}': {str(data)[:120]}")
