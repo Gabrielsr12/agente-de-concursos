@@ -82,6 +82,7 @@ O comportamento é ajustado por variáveis, sem mexer no código.
 | `UFS` | `rj,br` | Estados a monitorar, separados por vírgula. `br` é o recorte nacional. |
 | `STATUSES` | `open` | Situações aceitas: `open` (aberto), `expected` (previsto) e `closed` (encerrado). |
 | `KEYWORDS` | vazio | Só avisa concursos cujo órgão contenha uma das palavras, como `prefeitura,tribunal`. |
+| `EXCLUDE_KEYWORDS` | vazio | Descarta concursos cujo órgão contenha uma das palavras, como `prefeitura,câmara`. Ignora maiúsculas e acentos. |
 | `MAX_PER_UF` | `20` | Máximo de concursos novos enviados por estado a cada execução. |
 | `FIRST_RUN_SEND` | `0` | Com `1`, envia a lista completa já na primeira execução. |
 | `TELEGRAM_BOT_TOKEN` | n/a | Token do bot, guardado como *secret* do GitHub. |
