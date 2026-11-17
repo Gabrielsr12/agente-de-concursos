@@ -55,6 +55,7 @@ def load_config():
         "ufs": env_list("UFS", "rj,br"),
         "statuses": env_list("STATUSES", "open"),
         "keywords": env_list("KEYWORDS", ""),
+        "exclude": env_list("EXCLUDE_KEYWORDS", ""),
         "max_per_uf": int(os.environ.get("MAX_PER_UF", "20")),
         "state_file": Path(os.environ.get("STATE_FILE", "state/seen.json")),
         "first_run_send": os.environ.get("FIRST_RUN_SEND", "0") == "1",
@@ -197,10 +198,11 @@ def normalize(text):
 def passes_filters(item, cfg):
     if cfg["statuses"] and item["status"] not in cfg["statuses"]:
         return False
-    if cfg["keywords"]:
-        org = normalize(item["organization"])
-        if not any(normalize(k) in org for k in cfg["keywords"]):
-            return False
+    org = normalize(item["organization"])
+    if cfg["keywords"] and not any(normalize(k) in org for k in cfg["keywords"]):
+        return False
+    if cfg["exclude"] and any(normalize(k) in org for k in cfg["exclude"]):
+        return False
     return True
 
 
