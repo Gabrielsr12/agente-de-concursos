@@ -42,6 +42,7 @@ jobs:
           UFS: ${{ vars.UFS || 'rj,br' }}
           STATUSES: ${{ vars.STATUSES || 'open' }}
           KEYWORDS: ${{ vars.KEYWORDS || '' }}
+          EXCLUDE_KEYWORDS: ${{ vars.EXCLUDE_KEYWORDS || '' }}
         run: python bot.py
 
       - name: Salvar estado (links já enviados)
